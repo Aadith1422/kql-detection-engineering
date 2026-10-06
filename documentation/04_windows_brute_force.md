@@ -1,82 +1,86 @@
-# Detection 04 - Windows Brute Force
+# Detection 04 - Windows Brute Force and Password Spray
 
 ## Objective
 
-Detect repeated failed Windows logon attempts that may
-indicate brute-force activity.
+Detect repeated failed Windows logons that suggest an attacker is guessing
+passwords, either against one account (brute force) or across many accounts
+(password spray).
 
 ## Data Source
 
-Windows Event ID 4625 - Failed Logon
+Windows Security Event ID 4625 - An account failed to log on
+(table: `SecurityEvent`, same column names as the Microsoft Sentinel table).
+
+Event 4625 comes from the Windows **Security** log. Sysmon does not generate it.
+
+| Field | Meaning |
+|---|---|
+| `TargetUserName` | Account that was attacked |
+| `IpAddress` | Source of the attempt |
+| `LogonType` | 2 interactive, 3 network, 10 remote interactive (RDP) |
+| `SubStatus` | Failure reason, e.g. `0xC000006A` wrong password |
 
 ## MITRE ATT&CK
 
-T1110 - Brute Force
+- **T1110 - Brute Force** (Query A)
+- **T1110.003 - Brute Force: Password Spraying** (Query B)
 
 ## Detection Logic
 
-The detection counts failed logon events for each user.
+**Query A - Brute force.** Count failures per account, source IP and host in
+10-minute windows. Alert at 5 or more.
 
-The events are grouped into 10-minute windows.
+**Query B - Password spray.** Count distinct accounts failed per source IP in
+30-minute windows. Alert at 5 or more distinct accounts and 5 or more attempts.
 
-An alert is generated when 3 or more failed logons occur
-for the same user within the same window.
+## Thresholds
 
-## Threshold
+| Query | Threshold | Reason |
+|---|---|---|
+| A | 5 failures / 10 min / account / source | Above normal mistyped passwords |
+| B | 5 distinct accounts / 30 min / source | Spray tries few passwords across many accounts, so Query A misses it |
 
-3 or more failed logons within 10 minutes.
-
-This threshold is an initial baseline for the simulated
-lab dataset and should be tuned against normal authentication
-activity in a production environment.
+These are starting values for the simulated data and must be tuned in a real
+environment.
 
 ## Validation
 
-The detection produced 1 matching time window in the
-simulated dataset.
+Test data: `test-data/WindowsSecurityEvents.csv` (simulated).
 
-The detected window contained:
+| Scenario | Source | Query A | Query B |
+|---|---|---|---|
+| 6 failures against `Administrator` in 6 minutes | 10.10.5.23 | **Alert** (6 failures) | No (1 account) |
+| 8 failures across 6 accounts in 12 minutes | 10.10.5.77 | No (1-2 per account) | **Alert** (6 accounts) |
+| 2 failures then a success for `jsmith` | 10.10.2.14 | No | No |
+| 1 failure for `mlee` | 10.10.2.31 | No | No |
 
-- User: CORP\Administrator
-- 4 failed logons
+This shows why both queries are needed.
 
-A single failed logon for CORP\Aadith was not detected
-because it did not reach the threshold.
+## False Positives
 
-## False Positive Considerations
-
-Potential benign sources include:
-
-- Users entering incorrect passwords
-- Expired credentials
-- Service account configuration problems
-- Scheduled tasks using old credentials
-- Administrative troubleshooting
+- Users mistyping passwords, or returning after a password change.
+- Service accounts with expired or outdated passwords.
+- Shared NAT or VPN addresses that group many users under one IP (Query B).
+- Vulnerability scanners and authorized testing.
 
 ## Investigation
 
-When an alert fires, investigate:
-
-1. Username
-2. Number of failed attempts
-3. Time window
-4. Source information, if available
-5. Successful logons following the failures
-6. Whether the account activity is expected
+1. Source IP: internal or external, known or new? Check reputation.
+2. Which accounts were targeted? Privileged or service accounts?
+3. Failure reasons: wrong password (`0xC000006A`) vs unknown user (`0xC0000064`).
+4. Was there a successful logon (4624) from the same source after the failures?
+5. Logon type: network or RDP exposed to the internet?
 
 ## Response
 
-If brute-force activity is confirmed:
+1. Block or rate-limit the source IP.
+2. If a success followed the failures, treat the account as compromised: reset
+   credentials, revoke sessions, review account activity.
+3. Enforce MFA and lockout policy on targeted accounts.
+4. Check other hosts and accounts for the same source.
 
-1. Identify the source.
-2. Check whether the account was successfully compromised.
-3. Investigate successful authentication events.
-4. Block or restrict the source where appropriate.
-5. Reset compromised credentials.
-6. Review the account and endpoint for further activity.
+## Limitations
 
-## Validation Note
-
-The detection was validated using simulated Event ID 4625
-telemetry because a Windows endpoint was not available during
-the lab.
+- Fixed time windows can split an attack that straddles a boundary.
+- Does not yet correlate with successful logons (4624).
+- Slow "low and slow" attacks over many hours stay under these thresholds.

@@ -1,5 +1,5 @@
 // Detection: Sensitive File Web Reconnaissance
-// MITRE ATT&CK: T1595 - Active Scanning
+// MITRE ATT&CK: T1595.003 - Active Scanning: Wordlist Scanning
 // Data Source: Application Insights / AppRequests
 // Severity: Medium
 //

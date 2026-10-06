@@ -53,7 +53,7 @@ The main objectives of this project are:
 - Kusto Query Language (KQL)
 - Azure Data Explorer
 - Sysmon
-- Windows Event Logs
+- Windows Event Logs (Security log, Event ID 4625)
 - Application Insights / AppRequests
 - MITRE ATT&CK
 - Linux
@@ -100,10 +100,10 @@ The project currently contains four security detections.
 
 | # | Detection | Data Source | Event / Table | MITRE ATT&CK |
 |---|---|---|---|---|
-| 01 | Sensitive File Web Reconnaissance | Application telemetry | AppRequests | T1595 |
-| 02 | LSASS Credential Dumping | Sysmon | Event ID 1 | T1003.001 |
-| 03 | Registry Run Keys Persistence | Sysmon | Event ID 13 | T1547.001 |
-| 04 | Windows Brute Force | Windows telemetry | Event ID 4625 | T1110 |
+| 01 | Sensitive File Web Reconnaissance | Application telemetry (Microsoft demo data) | AppRequests | T1595.003 |
+| 02 | LSASS Credential Dumping | Sysmon (simulated) | SysmonEvents, Event ID 1 | T1003.001 |
+| 03 | Registry Run Keys Persistence | Sysmon (simulated) | SysmonRegistryEvents, Event ID 13 | T1547.001 |
+| 04 | Windows Brute Force and Password Spray | Windows Security log (simulated) | SecurityEvent, Event ID 4625 | T1110, T1110.003 |
 
 ---
 
@@ -121,7 +121,7 @@ reconnaissance or automated scanning.
 
 ## MITRE ATT&CK
 
-**T1595 - Active Scanning**
+**T1595.003 - Active Scanning: Wordlist Scanning**
 
 ## Detection Logic
 
@@ -205,14 +205,12 @@ Sysmon Event ID 1 - Process Creation
 
 ## Detection Logic
 
-The detection searches process creation events for a command line
-containing both:
+The detection looks for process creation events where:
 
-- `comsvcs.dll`
-- `MiniDump`
-
-The observed activity uses `rundll32.exe` to invoke
-`comsvcs.dll`.
+1. The process is `rundll32.exe`, and
+2. The command line contains `comsvcs.dll`, and
+3. The command line calls the `MiniDump` export, by name or by
+   ordinal (`#24`).
 
 ## Detection Pattern
 
@@ -223,7 +221,7 @@ rundll32.exe
 comsvcs.dll
       |
       v
-MiniDump
+MiniDump (or #24)
       |
       v
 LSASS memory dump
@@ -261,6 +259,11 @@ When an alert fires, investigate:
 6. Dump file path, if available
 7. Whether the activity was authorized
 
+## Limitations
+
+Covers one technique only. Renamed binaries and other dump tools are not
+detected. Pair with Sysmon Event ID 10 (ProcessAccess to `lsass.exe`).
+
 ## Response
 
 If malicious activity is confirmed:
@@ -278,12 +281,16 @@ If malicious activity is confirmed:
 
 ## Objective
 
-Detect modifications to Windows Registry locations that may
-be used to establish persistence.
+Detect values written to the Windows `Run` and `RunOnce` registry keys,
+which attackers use to start a program automatically at logon.
 
 ## Data Source
 
-Sysmon Event ID 13 - Registry Value Set
+Sysmon Event ID 13 - Registry Value Set (`SysmonRegistryEvents`)
+
+- `TargetObject`: the registry path written
+- `Details`: the value written, usually the program that will run
+- `Image`: the process that made the change
 
 ## MITRE ATT&CK
 
@@ -291,120 +298,114 @@ Sysmon Event ID 13 - Registry Value Set
 
 ## Detection Logic
 
-The detection searches for Registry modifications involving
-common Windows `Run` and `RunOnce` locations.
+The detection keeps Event ID 13 events where `TargetObject` ends in
+`\CurrentVersion\Run\<value>` or `\CurrentVersion\RunOnce\<value>`.
 
-## Persistence Locations
-
-```text
-CurrentVersion\Run
-CurrentVersion\RunOnce
-```
+Writes whose `Details` point to user-writable folders commonly used by
+attackers (`\Users\Public\`, `\ProgramData\`, `\Temp\`,
+`\AppData\Roaming\`) are flagged `SuspiciousPath = true` and shown first.
 
 ## Threshold
 
-Any matching Registry modification generates a detection.
+Any matching write generates a result. `SuspiciousPath` is used for triage.
 
 ## Validation
 
-The detection produced 3 matching events in the simulated
-Sysmon dataset.
+The detection produced 5 results in the simulated dataset:
 
-The detected events modified:
+- 3 with `SuspiciousPath = true` (programs in `C:\Users\Public` and
+  `C:\ProgramData` written by `reg.exe` and PowerShell)
+- 2 legitimate Run key writes (OneDrive and SecurityHealth), which show why
+  allow-listing is needed
 
-- `CurrentVersion\Run`
-- `CurrentVersion\RunOnce`
+Two unrelated registry writes were correctly ignored.
 
 ## Investigation
 
-When an alert fires, investigate:
-
-1. Registry path
-2. Registry value
-3. Executable path
-4. User identity
-5. Parent process
-6. Process command line
-7. Whether the referenced executable is legitimate
+1. Which process wrote the value, and what started it?
+2. What does `Details` point to? Does the file exist, and is it signed?
+3. Which user and host?
+4. Was the file recently created or downloaded?
+5. Is the same value present on other hosts?
 
 ## Response
 
 If malicious activity is confirmed:
 
-1. Identify the persistence mechanism
-2. Remove or disable the malicious Registry entry
-3. Investigate the referenced executable
-4. Check for additional persistence mechanisms
-5. Review the endpoint for related malicious activity
+1. Isolate the host
+2. Remove the registry value and quarantine the referenced file
+3. Look for other persistence (scheduled tasks, services, Startup folder)
+4. Review what the user and process did before the write
+5. Reset credentials if credential theft is suspected
 
 ---
 
-# Detection 04 - Windows Brute Force
+# Detection 04 - Windows Brute Force and Password Spray
 
 ## Objective
 
-Detect repeated failed Windows logon attempts that may
-indicate brute-force activity.
+Detect repeated failed Windows logons that suggest password guessing, either
+against one account (brute force) or across many accounts (password spray).
 
 ## Data Source
 
-Windows Event ID 4625 - Failed Logon
+Windows Security Event ID 4625 - An account failed to log on
+(`SecurityEvent`, same columns as the Microsoft Sentinel table).
+
+Event 4625 is written to the Windows Security log. Sysmon does not generate it.
 
 ## MITRE ATT&CK
 
-**T1110 - Brute Force**
+- **T1110 - Brute Force** (Query A)
+- **T1110.003 - Password Spraying** (Query B)
 
 ## Detection Logic
 
-The detection counts failed logon events for each user.
+**Query A - Brute force:** count failures per account, source IP and host
+in 10-minute windows.
 
-The events are grouped into 10-minute windows.
-
-An alert is generated when 3 or more failed logons occur
-for the same user within the same window.
+**Query B - Password spray:** count distinct accounts failed per source IP
+in 30-minute windows.
 
 ## Threshold
 
-**3 or more failed logons within 10 minutes.**
+- Query A: **5 or more failed logons within 10 minutes**
+- Query B: **5 or more distinct accounts (and 5 or more attempts) within 30 minutes**
 
-This threshold is an initial baseline for the simulated
-lab dataset and should be tuned against normal authentication
-activity in a production environment.
+These are initial baselines for the simulated lab dataset and should be tuned
+against normal authentication activity in a production environment.
 
 ## Validation
 
-The detection produced 1 matching time window in the
-simulated dataset.
+The simulated dataset contained four scenarios:
 
-The detected window contained:
+| Scenario | Query A | Query B |
+|---|---|---|
+| 6 failures against `Administrator` from one IP | **Alert** | No |
+| 8 failures across 6 accounts from one IP | No | **Alert** |
+| 2 typos then a success for one user | No | No |
+| 1 failure for one user | No | No |
 
-- User: `CORP\Administrator`
-- 4 failed logons
-
-A single failed logon for `CORP\Aadith` was not detected
-because it did not reach the threshold.
+This shows why both queries are needed: a spray stays below the per-account
+threshold of Query A.
 
 ## Investigation
 
-When an alert fires, investigate:
-
-1. Username
-2. Number of failed attempts
-3. Time window
-4. Source information, if available
-5. Successful logons following the failures
-6. Whether the account activity is expected
+1. Source IP: internal or external, known or new?
+2. Which accounts were targeted? Privileged or service accounts?
+3. Failure reason (wrong password vs unknown user)
+4. Was there a successful logon (4624) from the same source afterward?
+5. Logon type: network or RDP?
 
 ## Response
 
-If brute-force activity is confirmed:
+If brute-force or spray activity is confirmed:
 
-1. Identify the source
-2. Check whether the account was successfully compromised
-3. Investigate successful authentication events
-4. Block or restrict the source where appropriate
-5. Reset compromised credentials
-6. Review the account and endpoint for further activity
+1. Block or rate-limit the source
+2. If a success followed the failures, treat the account as compromised and
+   reset credentials
+3. Enforce MFA and account lockout on targeted accounts
+4. Check other hosts and accounts for the same source
 
 ---
 
@@ -588,10 +589,11 @@ The project currently covers the following techniques:
 
 | Technique | Name | Detection |
 |---|---|---|
-| T1595 | Active Scanning | Sensitive File Web Reconnaissance |
+| T1595.003 | Active Scanning: Wordlist Scanning | Sensitive File Web Reconnaissance |
 | T1003.001 | LSASS Memory | LSASS Credential Dumping |
 | T1547.001 | Registry Run Keys / Startup Folder | Registry Persistence |
 | T1110 | Brute Force | Windows Brute Force |
+| T1110.003 | Password Spraying | Windows Password Spray |
 
 Detailed mapping is available in:
 
@@ -603,25 +605,30 @@ Detailed mapping is available in:
 
 ```text
 kql-detection-engineering/
-│
-├── detections/
-│   ├── 01_sensitive_file_reconnaissance.kql
-│   ├── 02_lsass_credential_dumping.kql
-│   ├── 03_registry_persistence.kql
-│   └── 04_windows_brute_force.kql
-│
-├── documentation/
-│   ├── 01_sensitive_file_reconnaissance.md
-│   ├── 02_lsass_credential_dumping.md
-│   ├── 03_registry_persistence.md
-│   ├── 04_windows_brute_force.md
-│   └── mitre-mapping.md
-│
-├── screenshots/
-│
-├── test-data/
-│
-└── README.md
+|
+|-- detections/
+|   |-- 01_sensitive_file_reconnaissance.kql
+|   |-- 02_lsass_credential_dumping.kql
+|   |-- 03_registry_persistence.kql
+|   `-- 04_windows_brute_force.kql
+|
+|-- documentation/
+|   |-- 01_sensitive_file_reconnaissance.md
+|   |-- 02_lsass_credential_dumping.md
+|   |-- 03_registry_persistence.md
+|   |-- 04_windows_brute_force.md
+|   |-- mitre-mapping.md
+|   `-- reproduce.md
+|
+|-- screenshots/
+|   `-- (query results for each detection)
+|
+|-- test-data/
+|   |-- SysmonEvents.csv
+|   |-- SysmonRegistryEvents.csv
+|   `-- WindowsSecurityEvents.csv
+|
+`-- README.md
 ```
 
 ---
@@ -677,17 +684,18 @@ Examples include:
 
 # Test Data
 
-The project uses simulated security telemetry for validation.
+Detection 01 runs on the Microsoft Log Analytics demo environment data.
+Detections 02 to 04 run on simulated telemetry in `test-data/`:
 
-The telemetry represents security events such as:
+| File | Table | Contents |
+|---|---|---|
+| `SysmonEvents.csv` | `SysmonEvents` | Process creation events, benign and `comsvcs.dll` MiniDump |
+| `SysmonRegistryEvents.csv` | `SysmonRegistryEvents` | Registry value writes (Event ID 13) |
+| `WindowsSecurityEvents.csv` | `SecurityEvent` | Failed and successful logons (Event ID 4625, 4624) |
 
-- Process creation
-- Registry modifications
-- Failed logons
-- Web requests
-
-This allows detections to be tested without requiring a
-continuously connected production environment.
+Each file mixes malicious-style and benign events so false positives and
+thresholds can be checked. To recreate the results, see
+[`documentation/reproduce.md`](documentation/reproduce.md).
 
 ---
 
@@ -710,7 +718,7 @@ continuously connected production environment.
 
 **4 detections**
 
-**4 MITRE ATT&CK techniques**
+**5 MITRE ATT&CK techniques and sub-techniques**
 
 **3 telemetry sources**
 
@@ -734,6 +742,8 @@ generation, ticket creation, or endpoint response actions.
 
 Potential future improvements include:
 
+- Correlate failed logons (4625) with later successes (4624)
+- Add Sysmon Event ID 10 (ProcessAccess to lsass.exe) coverage
 - Add additional Windows detection techniques
 - Add network-based detections
 - Improve detection thresholds using larger datasets

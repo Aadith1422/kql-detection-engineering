@@ -1,17 +1,23 @@
 // Detection: Registry Run Keys Persistence
 // MITRE ATT&CK: T1547.001 - Registry Run Keys / Startup Folder
 // Data Source: Sysmon Event ID 13 - Registry Value Set
+// Table: SysmonRegistryEvents
 // Severity: High
 //
 // Logic:
-// Detect modifications to common Windows Registry Run
-// and RunOnce locations used for persistence.
+// Detect values written under CurrentVersion\Run and CurrentVersion\RunOnce.
+// Sysmon Event ID 13 stores the registry path in TargetObject and the value
+// written in Details; Image is the process that made the change.
+// Writes whose Details point to commonly abused user-writable folders are
+// flagged with SuspiciousPath so analysts can triage them first.
+//
+// Tuning:
+// Legitimate software (OneDrive, security agents, updaters) also writes Run
+// keys. Allow-list known Image + TargetObject pairs once a baseline exists.
 
-SysmonEvents
+SysmonRegistryEvents
 | where EventID == 13
-| where CommandLine has_any (
-    "CurrentVersion\\Run",
-    "CurrentVersion\\RunOnce"
-)
-| project TimeCreated, Computer, User, Image, CommandLine, ParentImage, ProcessId
-| sort by TimeCreated desc
+| where TargetObject matches regex @"(?i)\\CurrentVersion\\Run(Once)?\\[^\\]+$"
+| extend SuspiciousPath = Details matches regex @"(?i)(\\Users\\Public\\|\\ProgramData\\|\\Temp\\|\\AppData\\Roaming\\)"
+| project TimeCreated, Computer, User, Image, TargetObject, Details, SuspiciousPath, ProcessId
+| sort by SuspiciousPath desc, TimeCreated desc

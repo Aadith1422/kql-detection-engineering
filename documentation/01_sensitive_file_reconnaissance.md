@@ -12,7 +12,7 @@ AppRequests
 
 ## MITRE ATT&CK
 
-T1595 - Active Scanning
+T1595.003 - Active Scanning: Wordlist Scanning (probing many known sensitive paths)
 
 ## Detection Logic
 

@@ -1,15 +1,40 @@
-// Detection: Windows Brute Force
-// MITRE ATT&CK: T1110 - Brute Force
-// Data Source: Windows Event ID 4625 - Failed Logon
+// Detection: Windows Brute Force and Password Spray
+// MITRE ATT&CK: T1110 - Brute Force (Query A), T1110.003 - Password Spraying (Query B)
+// Data Source: Windows Security Event ID 4625 - An account failed to log on
+// Table: SecurityEvent (same column names as the Microsoft Sentinel SecurityEvent table)
 // Severity: High
 //
-// Logic:
-// Detect 3 or more failed logons for the same user
-// within a 10-minute window.
+// Note:
+// Event ID 4625 is written to the Windows Security log, not by Sysmon,
+// so it lives in its own table.
 
-SysmonEvents
+// ---------------------------------------------------------------
+// Query A - Brute force: many failures for ONE account from ONE source
+// Threshold: 5 or more failed logons within 10 minutes.
+// LogonType 2 = interactive, 3 = network, 10 = remote interactive (RDP).
+// ---------------------------------------------------------------
+SecurityEvent
 | where EventID == 4625
-| summarize FailedLogons = count()
-    by User, bin(TimeCreated, 10m)
-| where FailedLogons >= 3
-| sort by TimeCreated desc
+| where LogonType in (2, 3, 10)
+| summarize
+    FailedLogons = count(),
+    FirstFailure = min(TimeGenerated),
+    LastFailure = max(TimeGenerated)
+    by TargetUserName, IpAddress, Computer, Window = bin(TimeGenerated, 10m)
+| where FailedLogons >= 5
+| sort by FailedLogons desc
+
+// ---------------------------------------------------------------
+// Query B - Password spray: ONE source failing against MANY accounts
+// Threshold: 5 or more distinct accounts within 30 minutes.
+// ---------------------------------------------------------------
+SecurityEvent
+| where EventID == 4625
+| where LogonType in (3, 10)
+| summarize
+    Attempts = count(),
+    DistinctUsers = dcount(TargetUserName),
+    Users = make_set(TargetUserName, 20)
+    by IpAddress, Window = bin(TimeGenerated, 30m)
+| where DistinctUsers >= 5 and Attempts >= 5
+| sort by DistinctUsers desc

@@ -15,17 +15,21 @@ T1003.001 - LSASS Memory
 
 ## Detection Logic
 
-The detection looks for process creation events where the
-command line contains both comsvcs.dll and MiniDump.
+The detection looks for process creation events where:
 
-The combination may indicate an attempt to create a memory
-dump of a process such as LSASS.
+1. The process is `rundll32.exe`, and
+2. The command line contains `comsvcs.dll`, and
+3. The command line calls the `MiniDump` export, either by name or by
+   ordinal (`#24`).
+
+Together these indicate an attempt to dump the memory of a process such
+as LSASS to disk.
 
 ## Detection Pattern
 
-- comsvcs.dll
-- MiniDump
-- rundll32.exe
+```text
+rundll32.exe  ->  comsvcs.dll  ->  MiniDump (or #24)  ->  LSASS memory dump
+```
 
 ## Threshold
 
@@ -83,3 +87,11 @@ If malicious activity is confirmed:
 
 The detection was validated using simulated Sysmon telemetry
 because a Windows endpoint was not available during the lab.
+
+## Limitations
+
+- Covers one technique only. Attackers can rename `rundll32.exe`, or use other
+  tools (ProcDump, Task Manager, direct API calls).
+- Name-based matching can be evaded by obfuscating the command line.
+- For broader coverage, add a detection on Sysmon Event ID 10 (ProcessAccess
+  to `lsass.exe`).

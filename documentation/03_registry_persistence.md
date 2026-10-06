@@ -2,83 +2,77 @@
 
 ## Objective
 
-Detect modifications to Windows Registry locations that may
-be used to establish persistence.
+Detect values written to the Windows `Run` and `RunOnce` registry keys, which
+attackers use to make a program start automatically at logon.
 
 ## Data Source
 
-Sysmon Event ID 13 - Registry Value Set
+Sysmon Event ID 13 - Registry Value Set (table: `SysmonRegistryEvents`)
+
+| Field | Meaning |
+|---|---|
+| `TargetObject` | Full registry path of the value that was written |
+| `Details` | The data written, usually the program that will run |
+| `Image` | The process that made the change |
 
 ## MITRE ATT&CK
 
-T1547.001 - Registry Run Keys / Startup Folder
+**T1547.001 - Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder**
 
 ## Detection Logic
 
-The detection looks for Registry modifications involving
-common Run and RunOnce locations.
-
-The events are filtered for:
-
-- CurrentVersion\Run
-- CurrentVersion\RunOnce
-
-## Persistence Locations
-
-- CurrentVersion\Run
-- CurrentVersion\RunOnce
+1. Keep Event ID 13 events.
+2. Keep events where `TargetObject` ends in `\CurrentVersion\Run\<value>` or
+   `\CurrentVersion\RunOnce\<value>`.
+3. Add `SuspiciousPath = true` when `Details` points to a folder that attackers
+   commonly use because ordinary users can write to it: `\Users\Public\`,
+   `\ProgramData\`, `\Temp\`, `\AppData\Roaming\`.
+4. Show suspicious-path events first.
 
 ## Threshold
 
-Any matching Registry modification generates a detection.
+Any matching write generates a result. `SuspiciousPath` is used for triage.
 
 ## Validation
 
-The detection produced 3 matching events in the simulated
-Sysmon dataset.
+Test data: `test-data/SysmonRegistryEvents.csv` (7 events, simulated).
 
-The detected events modified:
+| Result | Count | Events |
+|---|---|---|
+| Returned by the query | 5 | 3 malicious-style, 2 legitimate |
+| `SuspiciousPath = true` | 3 | `reg.exe` and PowerShell writing programs in `C:\Users\Public` and `C:\ProgramData` |
+| Legitimate Run key writes | 2 | OneDrive (HKCU Run) and SecurityHealth (HKLM Run) |
+| Correctly ignored | 2 | `ExampleApp` setting and `Explorer\RecentDocs` |
 
-- CurrentVersion\Run
-- CurrentVersion\RunOnce
+## False Positives
 
-A benign Registry modification outside these locations was
-not returned by the detection.
+- OneDrive, Teams, security agents and updaters write Run keys legitimately.
+- Software installers and deployment tools.
+- Administrators configuring startup programs.
 
-## False Positive Considerations
-
-Potential benign sources include:
-
-- Software installation
-- Application updates
-- Enterprise software deployment
-- Administrative configuration
-- Authorized system maintenance
+Tuning: allow-list known `Image` + `TargetObject` pairs after a baseline period.
 
 ## Investigation
 
-When an alert fires, investigate:
-
-1. Registry path
-2. Registry value
-3. Executable path
-4. User identity
-5. Parent process
-6. Process command line
-7. Whether the referenced executable is legitimate
+1. Which process wrote the value (`Image`) and what started it (parent process)?
+2. What does `Details` point to? Does the file exist, and is it signed?
+3. Which user and host?
+4. Was the file recently created or downloaded?
+5. Is the same value present on other hosts?
 
 ## Response
 
-If malicious activity is confirmed:
+If malicious:
 
-1. Identify the persistence mechanism.
-2. Remove or disable the malicious Registry entry.
-3. Investigate the referenced executable.
-4. Check for additional persistence mechanisms.
-5. Review the endpoint for related malicious activity.
+1. Isolate the host if the program is confirmed malicious.
+2. Remove the registry value and quarantine the referenced file.
+3. Look for other persistence (scheduled tasks, services, Startup folder).
+4. Review what the user and process did before the write.
+5. Reset credentials if credential theft is suspected.
 
-## Validation Note
+## Limitations
 
-The detection was validated using simulated Sysmon Event ID 13
-telemetry because a Windows endpoint was not available during
-the lab.
+- Covers only the `Run` and `RunOnce` keys, not other persistence methods.
+- Needs a Sysmon configuration that logs Event ID 13 for these keys.
+- Attackers can use other autostart locations or write the value without using the
+  registry-set API Sysmon watches.
