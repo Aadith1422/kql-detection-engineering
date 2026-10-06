@@ -1,0 +1,15 @@
+// Detection: Windows Brute Force
+// MITRE ATT&CK: T1110 - Brute Force
+// Data Source: Windows Event ID 4625 - Failed Logon
+// Severity: High
+//
+// Logic:
+// Detect 3 or more failed logons for the same user
+// within a 10-minute window.
+
+SysmonEvents
+| where EventID == 4625
+| summarize FailedLogons = count()
+    by User, bin(TimeCreated, 10m)
+| where FailedLogons >= 3
+| sort by TimeCreated desc

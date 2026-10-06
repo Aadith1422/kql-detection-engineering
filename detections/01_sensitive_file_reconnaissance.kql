@@ -1,0 +1,33 @@
+// Detection: Sensitive File Web Reconnaissance
+// MITRE ATT&CK: T1595 - Active Scanning
+// Data Source: Application Insights / AppRequests
+// Severity: Medium
+//
+// Logic:
+// Detect repeated requests for sensitive configuration or
+// administrative files that returned HTTP 404 responses.
+// A threshold of 3+ probes within 10 minutes is used as an
+// initial baseline for this demo dataset.
+//
+// Note:
+// ClientIP was not used because the demo telemetry reported
+// 0.0.0.0 for the observed 404 population.
+
+AppRequests
+| where ResultCode == "404"
+| where Url has_any (
+    ".env",
+    ".git/config",
+    "wp-config",
+    "web.config",
+    "config.php",
+    "phpinfo",
+    "server-status"
+)
+| summarize
+    ProbeCount = count(),
+    UniqueTargets = dcount(Url),
+    SampleTargets = make_set(Url, 10)
+    by bin(TimeGenerated, 10m)
+| where ProbeCount >= 3
+| sort by TimeGenerated desc

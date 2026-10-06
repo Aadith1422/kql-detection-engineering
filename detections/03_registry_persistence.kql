@@ -1,0 +1,17 @@
+// Detection: Registry Run Keys Persistence
+// MITRE ATT&CK: T1547.001 - Registry Run Keys / Startup Folder
+// Data Source: Sysmon Event ID 13 - Registry Value Set
+// Severity: High
+//
+// Logic:
+// Detect modifications to common Windows Registry Run
+// and RunOnce locations used for persistence.
+
+SysmonEvents
+| where EventID == 13
+| where CommandLine has_any (
+    "CurrentVersion\\Run",
+    "CurrentVersion\\RunOnce"
+)
+| project TimeCreated, Computer, User, Image, CommandLine, ParentImage, ProcessId
+| sort by TimeCreated desc

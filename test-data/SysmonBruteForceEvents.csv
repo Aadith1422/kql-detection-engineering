@@ -1,0 +1,6 @@
+TimeCreated,EventID,Computer,Image,CommandLine,ParentImage,ParentCommandLine,User,ProcessId
+2026-10-06 12:00:00,4625,CLIENT01,C:\Windows\System32\winlogon.exe,Failed interactive logon,C:\Windows\System32\services.exe,services.exe,CORP\Administrator,4000
+2026-10-06 12:01:00,4625,CLIENT01,C:\Windows\System32\winlogon.exe,Failed interactive logon,C:\Windows\System32\services.exe,services.exe,CORP\Administrator,4001
+2026-10-06 12:02:00,4625,CLIENT01,C:\Windows\System32\winlogon.exe,Failed interactive logon,C:\Windows\System32\services.exe,services.exe,CORP\Administrator,4002
+2026-10-06 12:03:00,4625,CLIENT01,C:\Windows\System32\winlogon.exe,Failed interactive logon,C:\Windows\System32\services.exe,services.exe,CORP\Administrator,4003
+2026-10-06 12:20:00,4625,CLIENT01,C:\Windows\System32\winlogon.exe,Failed interactive logon,C:\Windows\System32\services.exe,services.exe,CORP\Aadith,4010
